@@ -18,27 +18,6 @@ user_agent = [
 SCORE={"还行":3, "推荐":4, "力荐":5, "较差":2, "很差":1, "0":0}
 headers = {"User-agent": random.choice(HEADERS)}
 
-def get_ip_list(headers):
-    url = 'http://www.xicidaili.com/nn/'
-    web_data = requests.get(url, headers=headers)
-    soup = bs4.BeautifulSoup(web_data.text, 'lxml')
-    ips = soup.find_all('tr')
-    ip_list = []
-    for i in range(1, len(ips)):
-        ip_info = ips[i]
-        tds = ip_info.find_all('td')
-        ip_list.append(tds[1].text + ':' + tds[2].text)
-    return ip_list
-
-
-def get_random_ip(ip_list):
-    proxy_list = []
-    for ip in ip_list:
-        proxy_list.append('http://' + ip)
-    proxy_ip = random.choice(proxy_list)
-    proxies = {'http': proxy_ip}
-    return proxies
-
 def load_data():
     # name = input("Please input the thing you want to search: ")
     name = "24733428"
@@ -55,11 +34,11 @@ def load_data():
         f.write(data)
 
 
-def allMoviesOnDisplay(cursor, proxies):
-    url = "https://movie.douban.com/cinema/nowplaying/beijing/"
-    response = requests.get(url, headers=headers, proxies=proxies)
-    # response = urllib.request.Request(url, headers=headers)
-    # response = urllib.request.urlopen(response)
+def allMoviesOnDisplay(connect, proxies):
+    url = "https://movie.douban.com/cinema/nowplaying/huainan/"
+    # response = requests.get(url, headers=headers, proxies=proxies)
+    response = urllib.request.Request(url, headers=headers)
+    response = urllib.request.urlopen(response)
     print(response)
     # response = response.read().decode('utf-8')
     '''
@@ -75,30 +54,41 @@ def allMoviesOnDisplay(cursor, proxies):
         value = tip.find_all("img")[0].get('alt')
         number[key] = value
     print(len(number), "共有这么多部电影等待爬取")
-    singleMovie(number, cursor, proxies)
+    singleMovie(number, connect, proxies)
     return number  # 返回字典：{电影url：电影名}
 
-def singleMovie(number:dict, cursor, proxies):
+def singleMovie(number:dict, connect, proxies):
     response = None
-    for key in number.keys():
-        response = urllib.request.Request(key, headers=headers)
-        response = urllib.request.urlopen(response)
-        print("当前爬取的电影为：", number[key], " url 是", key)
-        response = response.read().decode('utf-8')
-        '''
-        with open(number[key]+".html", "w+", encoding='utf-8') as f:
-            f.write(response)
-        f.close()
-        '''
-        time.sleep(1)
-        extractInfo(response, cursor, key, proxies)
+    next_href = {}
+    MOVIEID = {}
+    for i in range(10):
+        for key in number.keys():
+            response = urllib.request.Request(key, headers=headers)
+            response = urllib.request.urlopen(response)
+            print("当前爬取的电影为：", number[key], " url 是", key, "这是第", i, "轮爬取")
+            response = response.read().decode('utf-8')
+            '''
+            with open(number[key]+".html", "w+", encoding='utf-8') as f:
+                f.write(response)
+            f.close()
+            '''
+            time.sleep(1)
 
-def extractInfo(response, cursor, url, proxies):  # 抽取单个电影的基本信息
+            if i == 0:
+                next_href, temp = extractInfo(number[key], response, connect, key, proxies, next_href)
+                if temp != "null":
+                    MOVIEID[number[key]] = temp
+            else:
+                if(next_href[number[key]] != "null"):
+                    next_href = shortCommentGet(number[key], next_href[number[key]], connect, MOVIEID[number[key]], proxies, next_href)
+
+def extractInfo(movie_name, response, connect, url, proxies, next_href:dict):  # 抽取单个电影的基本信息
+    # url = "https://movie.douban.com/subject/24733428/?from=playing_poster"
     # response = open("心灵奇旅.html")
     soup = bs4.BeautifulSoup(response, 'lxml')
     score_count = soup.find_all('span', attrs={'property': 'v:votes'})
     if(len(score_count) == 0):
-        return
+        return next_href, "null"
     else:
         score_count = score_count[0].next_element  # 打分的总人数,刚上映一两天的电影有时候会没有评分信息
     score = soup.find_all('strong', attrs={'property': 'v:average', 'class': 'll rating_num'})[0].string  # 总平均分
@@ -109,13 +99,19 @@ def extractInfo(response, cursor, url, proxies):  # 抽取单个电影的基本�
         temp = re.findall(r"\d+", i.string)[0]
         href = i.get('href')
         data.append([temp, href])
-    number = re.findall(r"\d+", url)
-    data[1][1] = "https://movie.douban.com/subject/" + number[0] + "/" + data[1][1]
+    number = re.findall(r"\d+", url)  # number[0]存储的是电影的ID
+    data[1][1] = "https://movie.douban.com/subject/" + number[0] + "/" + data[1][1]  # data里存放的是：短评数量（0）与url，长评数量与url，讨论数量与url
     data[2][1] = "https://movie.douban.com" + data[2][1]
     print("下一个要爬的电影是", number[0])  # 单个电影的长评和短评以及他们的href都在data里
-    shortCommentGet(data[0][1], cursor, number[0], proxies)  # 抽取短评并写入数据库
+    info = str(number[0]) + "','" + movie_name + "'," + str(score) + "," + str(data[0][0]) + "," + str(data[1][0]) + ")"
+    connect.cursor().execute(
+        "replace into basic_info (ID,name,score,comment_number,long_comment_number) values ('" + info)
+    connect.commit()
+    next_href = shortCommentGet(movie_name, data[0][1], connect, number[0], proxies, next_href)  # 抽取短评并写入数据库
+    print("测试用：", next_href, number[0])
+    return next_href, number[0]
 
-def shortCommentGet(href,connect, MOVIEID, proxies): # 抽取单个电影的短评
+def shortCommentGet(movie_name, href,connect, MOVIEID, proxies, next_href:dict): # 抽取单个电影的短评
     # jump to the short comment pages
     # href = "https://movie.douban.com/subject/24733428/comments?status=P"
     print("这个电影的MOVIEID为", MOVIEID)
@@ -123,8 +119,8 @@ def shortCommentGet(href,connect, MOVIEID, proxies): # 抽取单个电影的短�
     response = urllib.request.urlopen(response)
     response = response.read().decode('utf-8')
     baseurl = "https://movie.douban.com/subject/"+ MOVIEID +"/comments"
-    for i in range(5):
-        print("-------------------当前正在访问第", i, "页短评-------------------")
+    for i in range(10):
+        print("-------------------当前正在访问,", movie_name, "的第", i, "页短评-------------------")
         soup = bs4.BeautifulSoup(response, 'lxml')
         comments = soup.find_all('div', attrs={'class': 'comment-item'})
         for j in comments:
@@ -149,7 +145,7 @@ def shortCommentGet(href,connect, MOVIEID, proxies): # 抽取单个电影的短�
                 connect.commit()
         nextpage = soup.find_all('a', attrs={'class': 'next', 'data-page': 'next'})
         if(len(nextpage) == 0):
-            return  # 没有足够多的评论
+            return next_href  # 没有足够多的评论
         nextpage = nextpage[0].get('href')
         print("#################", nextpage, "####################\n\n")
         nextpage = baseurl + nextpage
@@ -158,10 +154,12 @@ def shortCommentGet(href,connect, MOVIEID, proxies): # 抽取单个电影的短�
             response = urllib.request.Request(nextpage, headers=headers)
         except Exception:
             print("Internet connect failed .....................\n\n\n\n\n")
-            return
+            return next_href
         response = urllib.request.urlopen(response)
         response = response.read().decode('utf-8')
         time.sleep(random.randint(1, 5))
+    next_href[movie_name] = nextpage
+    return next_href
 
 def databaseConnect(proxies):
     '''
@@ -176,7 +174,7 @@ def databaseConnect(proxies):
     print(connect)
     cleanDatabase(connect, "short_comments")
     cleanDatabase(connect, "basic_info")
-    cursor = connect.cursor()
+    # cursor = connect.cursor()
     '''
     number = "'123456',"
     name = "'test_movie',"
@@ -197,7 +195,4 @@ def cleanDatabase(connect, table):
     cursor.execute("truncate table " + table)  # 清空表
     connect.commit()
 
-# proxies = get_ip_list(headers)
-# print(proxies)
 databaseConnect({"http": "http://27.191.234.69:9999"})
-#load_data()
